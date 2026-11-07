@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IPTV Player</title>
+<style>
+:root{--bg:#0f1720;--panel:#18222e;--line:#2a3745;--text:#e8eef5;--mute:#8a9bad;--accent:#2fc4b2;--on-accent:#06201c;color-scheme:dark}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f3f6f9;--panel:#fff;--line:#d5dde5;--text:#16202b;--mute:#5b6b7b;--accent:#0e8f80;--on-accent:#fff;color-scheme:light}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+header{display:flex;gap:8px;flex-wrap:wrap;padding:10px;border-bottom:1px solid var(--line);background:var(--panel)}
+input,select,button,textarea{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+button{cursor:pointer}
+button.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:600}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+#url{flex:1 1 260px;min-width:0}
+main{flex:1;display:flex;min-height:0}
+aside{width:340px;max-width:45%;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--panel)}
+.filters{display:flex;gap:6px;padding:8px}
+.filters input{flex:1;min-width:0}
+.filters select{max-width:45%}
+#count{padding:0 10px 6px;color:var(--mute);font-size:13px}
+#list{flex:1;overflow-y:auto;margin:0;padding:0;list-style:none}
+#list li{display:flex;align-items:center;gap:10px;padding:8px 10px;cursor:pointer;border-top:1px solid var(--line)}
+#list li:hover,#list li.on{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+#list img{width:34px;height:34px;object-fit:contain;border-radius:6px;background:var(--bg);flex:none}
+#list .ph{width:34px;height:34px;border-radius:6px;background:var(--bg);flex:none;display:grid;place-items:center;color:var(--mute);font-size:12px}
+#list .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#list .gp{color:var(--mute);font-size:12px}
+section{flex:1;display:flex;flex-direction:column;min-width:0;padding:10px;gap:8px}
+video{width:100%;max-height:100%;background:#000;border-radius:10px;flex:1;min-height:0}
+#now{color:var(--mute)}
+#msg{color:var(--mute);padding:14px}
+details{padding:0 10px 8px}
+textarea{width:100%;height:90px;margin-top:6px}
+@media (max-width:720px){main{flex-direction:column-reverse}aside{width:100%;max-width:none;border-right:0;border-top:1px solid var(--line);height:50%}section{flex:none;height:42%}}
+</style>
+</head>
+<body>
+<header>
+  <input id="url" type="url" placeholder="Paste a playlist URL (.m3u / .m3u8)" aria-label="Playlist URL">
+  <button id="loadUrl" class="primary">Load URL</button>
+  <button id="pick">Open file</button>
+  <input id="file" type="file" accept=".m3u,.m3u8,.txt" hidden>
+</header>
+<details>
+  <summary>Or paste playlist text</summary>
+  <textarea id="paste" placeholder="#EXTM3U&#10;#EXTINF:-1 group-title=&quot;News&quot;,Channel name&#10;https://example.com/stream.m3u8"></textarea>
+  <button id="loadPaste" style="margin-top:6px">Load pasted text</button>
+</details>
+<main>
+  <aside>
+    <div class="filters">
+      <input id="q" type="search" placeholder="Search channel name" aria-label="Search channel name" autocomplete="off">
+      <select id="grp" aria-label="Filter by group"><option value="">All groups</option></select>
+    </div>
+    <div id="count"></div>
+    <ul id="list"></ul>
+    <div id="msg">Load a playlist to see channels.</div>
+  </aside>
+  <section>
+    <video id="v" controls autoplay playsinline></video>
+    <div id="now">Pick a channel to start playing.</div>
+  </section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js"></script>
+<script>
+(function(){
+  var channels=[],hls=null,cur=-1;
+  var $=function(id){return document.getElementById(id)};
+  var list=$('list'),msg=$('msg'),video=$('v');
+  function parse(text){
+    var out=[],lines=text.split(/\r?\n/),meta=null;
+    for(var i=0;i<lines.length;i++){
+      var l=lines[i].trim(); if(!l)continue;
+      if(l.indexOf('#EXTINF')===0){
+        var name=l.substring(l.lastIndexOf(',')+1).trim();
+        var attr=function(k){var m=l.match(new RegExp(k+'="([^"]*)"','i'));return m?m[1]:''};
+        meta={name:name||attr('tvg-name')||'Unnamed',logo:attr('tvg-logo'),group:attr('group-title')||'Other'};
+      }else if(l.charAt(0)!=='#'){
+        out.push({name:meta?meta.name:l,logo:meta?meta.logo:'',group:meta?meta.group:'Other',url:l}); meta=null;
+      }
+    } return out;
+  }
+  function setChannels(arr){
+    channels=arr; var groups=Array.from(new Set(arr.map(function(c){return c.group}))).sort();
+    $('grp').innerHTML='<option value="">All groups</option>'+groups.map(function(g){var o=document.createElement('option');o.value=g;o.textContent=g;return o.outerHTML}).join('');
+    msg.textContent=arr.length?'':'No channels found in this playlist.'; render();
+    try{localStorage.setItem('iptv-url',$('url').value)}catch(e){}
+  }
+  function render(){
+    var q=$('q').value.trim().toLowerCase(),g=$('grp').value;
+    var shown=channels.filter(function(c){return (!g||c.group===g)&&(!q||c.name.toLowerCase().indexOf(q)!==-1)});
+    $('count').textContent=channels.length?shown.length+' of '+channels.length+' channels':''; list.innerHTML='';
+    var frag=document.createDocumentFragment();
+    shown.slice(0,500).forEach(function(c){
+      var li=document.createElement('li'); if(channels.indexOf(c)===cur)li.className='on'; var pic;
+      if(c.logo){pic=document.createElement('img');pic.src=c.logo;pic.alt='';pic.loading='lazy';pic.onerror=function(){this.style.visibility='hidden'}}
+      else{pic=document.createElement('div');pic.className='ph';pic.textContent=c.name.charAt(0).toUpperCase()}
+      var t=document.createElement('div'),n=document.createElement('div');n.className='nm';n.textContent=c.name;
+      var gp=document.createElement('div');gp.className='gp';gp.textContent=c.group;t.appendChild(n);t.appendChild(gp);li.appendChild(pic);li.appendChild(t);li.onclick=function(){play(c)};frag.appendChild(li);
+    });
+    list.appendChild(frag); if(channels.length&&!shown.length)msg.textContent='No channel matches your search.';
+    else if(channels.length)msg.textContent=shown.length>500?'Showing first 500 matches. Type more to narrow down.':'';
+  }
+  function play(c){
+    cur=channels.indexOf(c);$('now').textContent='Playing: '+c.name;if(hls){hls.destroy();hls=null}
+    if(window.Hls&&Hls.isSupported()){
+      hls=new Hls();hls.loadSource(c.url);hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED,function(){video.play().catch(function(){})});
+      hls.on(Hls.Events.ERROR,function(e,d){if(d.fatal)$('now').textContent='Cannot play "'+c.name+'" ('+d.details+'). The stream may be offline, blocked by CORS, or http on an https page.'});
+    }else{video.src=c.url;video.play().catch(function(){})} render();
+  }
+  function loadText(t){setChannels(parse(t))}
+  $('loadUrl').onclick=function(){var u=$('url').value.trim();if(!u)return;msg.textContent='Loading playlist…';fetch(u).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text()}).then(loadText).catch(function(e){msg.textContent='Could not load the playlist ('+e.message+'). The server may block browser requests (CORS). Download the file and use Open file instead.'})};
+  $('url').addEventListener('keydown',function(e){if(e.key==='Enter')$('loadUrl').click()});$('pick').onclick=function(){$('file').click()};
+  $('file').onchange=function(){var f=this.files[0];if(!f)return;var r=new FileReader();r.onload=function(){loadText(r.result)};r.readAsText(f)};
+  $('loadPaste').onclick=function(){loadText($('paste').value)};$('q').addEventListener('input',render);$('grp').addEventListener('change',render);
+  try{var s=localStorage.getItem('iptv-url');if(s)$('url').value=s}catch(e){}
+})();
+</script>
+</body>
+</html>
